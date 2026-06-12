@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAllowedProofFile } from "@/lib/billing";
 import { jsonError } from "@/lib/api";
-import { uploadPrivateFile } from "@/lib/storage";
+import { deletePrivateFiles, uploadPrivateFile } from "@/lib/storage";
 import { publicProofSchema } from "@/lib/validators";
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
@@ -26,9 +26,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   });
   if (!parsed.success) return jsonError(parsed.error.issues[0]?.message || "Data pembayaran tidak valid.");
 
-  let proofFileUrl: string;
+  let proofFileUrl: string | null = null;
+  const proofBucket = process.env.STORAGE_BUCKET_PAYMENT_PROOFS || "payment-proofs";
   try {
-    proofFileUrl = await uploadPrivateFile(process.env.STORAGE_BUCKET_PAYMENT_PROOFS || "payment-proofs", proof, invoice.ownerId);
+    proofFileUrl = await uploadPrivateFile(proofBucket, proof, invoice.ownerId);
   } catch {
     return jsonError("Upload bukti gagal. Coba ulangi beberapa saat lagi.", 500);
   }
@@ -60,6 +61,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
 
     return NextResponse.json(payment, { status: 201 });
   } catch (error) {
+    await deletePrivateFiles(proofBucket, [proofFileUrl]);
     if (error instanceof Error && error.message === "INVOICE_UPLOAD_LOCKED") {
       return jsonError("Invoice ini sudah menerima bukti pembayaran.", 409);
     }

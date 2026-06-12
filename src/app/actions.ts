@@ -15,7 +15,7 @@ import { invoiceSchema, packageSchema, paymentSettingSchema, publicProofSchema }
 import { DEFAULT_TEMPLATES, buildTemplateVariables, buildWhatsAppLink, renderTemplate } from "@/lib/templates";
 import { getActiveMessageTemplate } from "@/lib/message-template-service";
 import { sendEmail } from "@/lib/email";
-import { uploadPrivateFile } from "@/lib/storage";
+import { deletePrivateFiles, uploadPrivateFile } from "@/lib/storage";
 import { MEMBER_STATUSES } from "@/lib/constants";
 
 function formString(formData: FormData, key: string) {
@@ -613,10 +613,11 @@ export async function uploadProofAction(formData: FormData) {
     actionError(`/pay/${parsed.data.token}`, "Upload gagal. Ukuran file maksimal 5 MB.");
   }
 
-  let proofFileUrl: string;
+  let proofFileUrl: string | null = null;
+  const proofBucket = process.env.STORAGE_BUCKET_PAYMENT_PROOFS || "payment-proofs";
   try {
     proofFileUrl = await uploadPrivateFile(
-      process.env.STORAGE_BUCKET_PAYMENT_PROOFS || "payment-proofs",
+      proofBucket,
       proof,
       invoice.ownerId,
     );
@@ -636,19 +637,20 @@ export async function uploadProofAction(formData: FormData) {
       }
 
       await tx.payment.create({
-      data: {
-        invoiceId: invoice.id,
-        memberId: invoice.memberId,
-        amount: invoice.amount,
-        paymentMethod: parsed.data.paymentMethod,
-        payerName: parsed.data.payerName || null,
-        proofFileUrl,
-        status: "pending_verification",
-        notes: parsed.data.notes || null,
-      },
+        data: {
+          invoiceId: invoice.id,
+          memberId: invoice.memberId,
+          amount: invoice.amount,
+          paymentMethod: parsed.data.paymentMethod,
+          payerName: parsed.data.payerName || null,
+          proofFileUrl,
+          status: "pending_verification",
+          notes: parsed.data.notes || null,
+        },
       });
     });
   } catch (error) {
+    await deletePrivateFiles(proofBucket, [proofFileUrl]);
     if (error instanceof Error && error.message === "INVOICE_UPLOAD_LOCKED") {
       actionError(`/pay/${parsed.data.token}`, "Invoice ini sudah menerima bukti pembayaran.");
     }
