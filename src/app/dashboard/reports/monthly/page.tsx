@@ -2,7 +2,7 @@ import { BarChart3, Download } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireOwner } from "@/lib/auth";
 import { formatCurrency, formatDate, formatPeriod } from "@/lib/format";
-import { getMonthlyReport } from "@/lib/reports";
+import { getMonthlyReport, normalizeReportMonth, normalizeReportStatus, normalizeReportYear } from "@/lib/reports";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -15,13 +15,14 @@ export default async function MonthlyReportPage({
   const owner = await requireOwner();
   const params = await searchParams;
   const now = new Date();
-  const month = Number(params.month || now.getMonth() + 1);
-  const year = Number(params.year || now.getFullYear());
+  const month = normalizeReportMonth(params.month, now.getMonth() + 1);
+  const year = normalizeReportYear(params.year, now.getFullYear());
+  const status = normalizeReportStatus(params.status);
   const report = await getMonthlyReport({
     ownerId: owner.id,
     month,
     year,
-    status: params.status,
+    status,
     member: params.member,
     packageId: params.package,
   });
@@ -31,7 +32,7 @@ export default async function MonthlyReportPage({
   const query = new URLSearchParams();
   query.set("month", String(month));
   query.set("year", String(year));
-  if (params.status) query.set("status", params.status);
+  if (status) query.set("status", status);
   if (params.member) query.set("member", params.member);
   if (params.package) query.set("package", params.package);
   const queryString = query.toString();
@@ -64,7 +65,7 @@ export default async function MonthlyReportPage({
       <form className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-[120px_120px_1fr_1fr_1fr_auto]">
         <input name="month" type="number" min="1" max="12" defaultValue={month} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
         <input name="year" type="number" min="2020" defaultValue={year} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
-        <select name="status" defaultValue={params.status || ""} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+        <select name="status" defaultValue={status || ""} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
           <option value="">Semua status</option>
           <option value="paid">Sudah bayar</option>
           <option value="unpaid">Belum bayar</option>

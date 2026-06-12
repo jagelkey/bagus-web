@@ -39,7 +39,7 @@ export default async function PublicPaymentPage({
       )
     : null;
 
-  const locked = invoice.status === "paid" || invoice.status === "cancelled";
+  const locked = ["pending_verification", "paid", "cancelled"].includes(invoice.status);
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 md:px-6">
@@ -121,7 +121,11 @@ export default async function PublicPaymentPage({
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-base font-semibold text-slate-950">Upload Bukti Pembayaran</h2>
           {locked ? (
-            <p className="mt-3 text-sm text-slate-600">Invoice ini sudah final dan tidak menerima upload bukti baru.</p>
+            <p className="mt-3 text-sm text-slate-600">
+              {invoice.status === "pending_verification"
+                ? "Bukti pembayaran sudah terkirim dan sedang menunggu verifikasi owner."
+                : "Invoice ini sudah final dan tidak menerima upload bukti baru."}
+            </p>
           ) : (
             <form action={uploadProofAction} className="mt-4 grid gap-4">
               <input type="hidden" name="token" value={token} />

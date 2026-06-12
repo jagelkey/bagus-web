@@ -11,11 +11,12 @@ import {
   isAllowedProofFile,
   normalizeWhatsApp,
 } from "@/lib/billing";
-import { packageSchema, paymentSettingSchema, publicProofSchema } from "@/lib/validators";
+import { invoiceSchema, packageSchema, paymentSettingSchema, publicProofSchema } from "@/lib/validators";
 import { DEFAULT_TEMPLATES, buildTemplateVariables, buildWhatsAppLink, renderTemplate } from "@/lib/templates";
 import { getActiveMessageTemplate } from "@/lib/message-template-service";
 import { sendEmail } from "@/lib/email";
 import { uploadPrivateFile } from "@/lib/storage";
+import { MEMBER_STATUSES } from "@/lib/constants";
 
 function formString(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim();
@@ -163,6 +164,18 @@ export async function saveMemberAction(formData: FormData) {
 
   if (!Number.isInteger(billingDueDay) || billingDueDay < 1 || billingDueDay > 31) {
     actionError(path, "Tanggal jatuh tempo harus 1 sampai 31.");
+  }
+
+  if (!MEMBER_STATUSES.includes(status as (typeof MEMBER_STATUSES)[number])) {
+    actionError(path, "Status member tidak valid.");
+  }
+
+  if (packageId) {
+    const selectedPackage = await prisma.package.findFirst({
+      where: { id: packageId, ownerId: owner.id },
+      select: { id: true },
+    });
+    if (!selectedPackage) actionError(path, "Paket member tidak valid.");
   }
 
   const data = {
@@ -341,21 +354,29 @@ export async function saveTemplateAction(formData: FormData) {
 
 export async function createInvoiceAction(formData: FormData) {
   const owner = await requireOwner();
-  const memberId = formString(formData, "memberId");
-  const periodMonth = Number(formString(formData, "periodMonth"));
-  const periodYear = Number(formString(formData, "periodYear"));
   const amountValue = formString(formData, "amount");
-  const dueDate = safeDate(formString(formData, "dueDate"));
+  const parsed = invoiceSchema.safeParse({
+    memberId: formString(formData, "memberId"),
+    periodMonth: formString(formData, "periodMonth"),
+    periodYear: formString(formData, "periodYear"),
+    amount: amountValue ? amountValue : undefined,
+    dueDate: formString(formData, "dueDate"),
+    notes: formString(formData, "notes"),
+  });
+
+  if (!parsed.success) {
+    actionError("/dashboard/invoices/new", parsed.error.issues[0]?.message || "Data invoice tidak valid.");
+  }
 
   try {
     const invoice = await createInvoiceForMember({
       ownerId: owner.id,
-      memberId,
-      periodMonth,
-      periodYear,
-      amount: amountValue ? Number(amountValue) : undefined,
-      dueDate,
-      notes: formString(formData, "notes"),
+      memberId: parsed.data.memberId,
+      periodMonth: parsed.data.periodMonth,
+      periodYear: parsed.data.periodYear,
+      amount: parsed.data.amount,
+      dueDate: parsed.data.dueDate instanceof Date ? parsed.data.dueDate : undefined,
+      notes: parsed.data.notes,
     });
     await logActivity({
       ownerId: owner.id,
@@ -379,6 +400,11 @@ export async function generateMonthlyInvoicesAction(formData: FormData) {
   const owner = await requireOwner();
   const periodMonth = Number(formString(formData, "periodMonth"));
   const periodYear = Number(formString(formData, "periodYear"));
+
+  if (!Number.isInteger(periodMonth) || periodMonth < 1 || periodMonth > 12 || !Number.isInteger(periodYear) || periodYear < 2020 || periodYear > 2100) {
+    actionError("/dashboard/invoices", "Periode invoice tidak valid.");
+  }
+
   const members = await prisma.member.findMany({
     where: { ownerId: owner.id, status: "active" },
     orderBy: { createdAt: "asc" },
@@ -436,6 +462,12 @@ export async function markInvoicePaidAction(formData: FormData) {
   const invoice = await prisma.invoice.findFirstOrThrow({
     where: { id, ownerId: owner.id },
   });
+
+  if (["paid", "cancelled"].includes(invoice.status)) {
+    revalidatePath("/dashboard/invoices");
+    revalidatePath("/dashboard/payments");
+    return;
+  }
 
   await prisma.$transaction([
     prisma.payment.create({
@@ -566,7 +598,7 @@ export async function uploadProofAction(formData: FormData) {
   });
 
   if (!invoice) actionError(`/pay/${parsed.data.token}`, "Token pembayaran tidak valid.");
-  if (["paid", "cancelled"].includes(invoice.status)) {
+  if (["pending_verification", "paid", "cancelled"].includes(invoice.status)) {
     actionError(`/pay/${parsed.data.token}`, "Invoice ini tidak menerima upload bukti baru.");
   }
 
@@ -592,8 +624,18 @@ export async function uploadProofAction(formData: FormData) {
     actionError(`/pay/${parsed.data.token}`, "Upload bukti gagal. Coba ulangi beberapa saat lagi.");
   }
 
-  await prisma.$transaction([
-    prisma.payment.create({
+  try {
+    await prisma.$transaction(async (tx) => {
+      const lockedInvoice = await tx.invoice.updateMany({
+        where: { id: invoice.id, status: { in: ["unpaid", "overdue"] } },
+        data: { status: "pending_verification" },
+      });
+
+      if (lockedInvoice.count === 0) {
+        throw new Error("INVOICE_UPLOAD_LOCKED");
+      }
+
+      await tx.payment.create({
       data: {
         invoiceId: invoice.id,
         memberId: invoice.memberId,
@@ -604,12 +646,14 @@ export async function uploadProofAction(formData: FormData) {
         status: "pending_verification",
         notes: parsed.data.notes || null,
       },
-    }),
-    prisma.invoice.update({
-      where: { id: invoice.id },
-      data: { status: "pending_verification" },
-    }),
-  ]);
+      });
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVOICE_UPLOAD_LOCKED") {
+      actionError(`/pay/${parsed.data.token}`, "Invoice ini sudah menerima bukti pembayaran.");
+    }
+    throw error;
+  }
 
   revalidatePath(`/pay/${parsed.data.token}`);
   redirect(`/pay/${parsed.data.token}?uploaded=1`);
@@ -622,6 +666,12 @@ export async function verifyPaymentAction(formData: FormData) {
     where: { id, invoice: { ownerId: owner.id } },
     include: { invoice: true },
   });
+
+  if (payment.status !== "pending_verification" || payment.invoice.status === "cancelled") {
+    revalidatePath("/dashboard/payments");
+    revalidatePath("/dashboard/invoices");
+    return;
+  }
 
   await prisma.$transaction([
     prisma.payment.update({
@@ -660,8 +710,14 @@ export async function rejectPaymentAction(formData: FormData) {
     include: { invoice: true },
   });
 
-  await prisma.$transaction([
-    prisma.payment.update({
+  if (payment.status !== "pending_verification") {
+    revalidatePath("/dashboard/payments");
+    revalidatePath("/dashboard/invoices");
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.payment.update({
       where: { id: payment.id },
       data: {
         status: "rejected",
@@ -669,12 +725,29 @@ export async function rejectPaymentAction(formData: FormData) {
         verifiedBy: owner.id,
         notes: formString(formData, "notes") || "Pembayaran ditolak.",
       },
-    }),
-    prisma.invoice.update({
-      where: { id: payment.invoiceId },
-      data: { status: "unpaid" },
-    }),
-    prisma.activityLog.create({
+    });
+
+    if (payment.invoice.status !== "cancelled") {
+      const [acceptedPayments, pendingPayments] = await Promise.all([
+        tx.payment.count({
+          where: { invoiceId: payment.invoiceId, id: { not: payment.id }, status: "accepted" },
+        }),
+        tx.payment.count({
+          where: { invoiceId: payment.invoiceId, id: { not: payment.id }, status: "pending_verification" },
+        }),
+      ]);
+      const nextStatus = acceptedPayments > 0 ? "paid" : pendingPayments > 0 ? "pending_verification" : "unpaid";
+
+      await tx.invoice.update({
+        where: { id: payment.invoiceId },
+        data: {
+          status: nextStatus,
+          paidAt: nextStatus === "paid" ? payment.invoice.paidAt : null,
+        },
+      });
+    }
+
+    await tx.activityLog.create({
       data: {
         ownerId: owner.id,
         action: "payment_rejected",
@@ -682,8 +755,8 @@ export async function rejectPaymentAction(formData: FormData) {
         entityId: payment.id,
         description: `Pembayaran invoice ${payment.invoice.invoiceNumber} ditolak.`,
       },
-    }),
-  ]);
+    });
+  });
 
   revalidatePath("/dashboard/payments");
   revalidatePath("/dashboard/invoices");

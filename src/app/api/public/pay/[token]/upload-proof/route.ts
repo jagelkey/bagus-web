@@ -9,7 +9,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   const { token } = await params;
   const invoice = await prisma.invoice.findUnique({ where: { paymentToken: token } });
   if (!invoice) return jsonError("Token pembayaran tidak valid.", 404);
-  if (["paid", "cancelled"].includes(invoice.status)) return jsonError("Invoice ini tidak menerima upload bukti baru.");
+  if (["pending_verification", "paid", "cancelled"].includes(invoice.status)) {
+    return jsonError("Invoice ini tidak menerima upload bukti baru.");
+  }
 
   const formData = await request.formData();
   const proof = formData.get("proof");
@@ -30,22 +32,37 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   } catch {
     return jsonError("Upload bukti gagal. Coba ulangi beberapa saat lagi.", 500);
   }
-  const payment = await prisma.$transaction(async (tx) => {
-    const created = await tx.payment.create({
-      data: {
-        invoiceId: invoice.id,
-        memberId: invoice.memberId,
-        amount: invoice.amount,
-        paymentMethod: parsed.data.paymentMethod,
-        payerName: parsed.data.payerName || null,
-        proofFileUrl,
-        status: "pending_verification",
-        notes: parsed.data.notes || null,
-      },
-    });
-    await tx.invoice.update({ where: { id: invoice.id }, data: { status: "pending_verification" } });
-    return created;
-  });
+  try {
+    const payment = await prisma.$transaction(async (tx) => {
+      const lockedInvoice = await tx.invoice.updateMany({
+        where: { id: invoice.id, status: { in: ["unpaid", "overdue"] } },
+        data: { status: "pending_verification" },
+      });
 
-  return NextResponse.json(payment, { status: 201 });
+      if (lockedInvoice.count === 0) {
+        throw new Error("INVOICE_UPLOAD_LOCKED");
+      }
+
+      const created = await tx.payment.create({
+        data: {
+          invoiceId: invoice.id,
+          memberId: invoice.memberId,
+          amount: invoice.amount,
+          paymentMethod: parsed.data.paymentMethod,
+          payerName: parsed.data.payerName || null,
+          proofFileUrl,
+          status: "pending_verification",
+          notes: parsed.data.notes || null,
+        },
+      });
+      return created;
+    });
+
+    return NextResponse.json(payment, { status: 201 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVOICE_UPLOAD_LOCKED") {
+      return jsonError("Invoice ini sudah menerima bukti pembayaran.", 409);
+    }
+    throw error;
+  }
 }

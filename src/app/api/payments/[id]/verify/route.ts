@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { readJson, requireApiOwner } from "@/lib/api";
+import { jsonError, readJson, requireApiOwner } from "@/lib/api";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiOwner();
@@ -8,6 +8,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { id } = await params;
   const body = await readJson<{ notes?: string }>(request);
   const payment = await prisma.payment.findFirstOrThrow({ where: { id, invoice: { ownerId: auth.owner.id } }, include: { invoice: true } });
+  if (payment.status !== "pending_verification") return jsonError("Pembayaran ini sudah diproses.", 409);
+  if (payment.invoice.status === "cancelled") return jsonError("Invoice sudah dibatalkan.", 409);
+
   const result = await prisma.$transaction(async (tx) => {
     await tx.payment.update({
       where: { id: payment.id },

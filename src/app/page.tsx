@@ -76,38 +76,42 @@ export default async function Home({
       : {}),
   };
 
-  const [
-    invoices,
-    totalInvoices,
-    paidInvoices,
-    unpaidInvoices,
-    pendingInvoices,
-    overdueInvoices,
-    cancelledInvoices,
-    revenue,
-    outstanding,
-  ] =
-    await Promise.all([
-      prisma.invoice.findMany({
-        where: invoiceWhere,
-        include: {
-          member: { include: { package: true } },
-        },
-        orderBy: [{ status: "asc" }, { dueDate: "asc" }, { createdAt: "desc" }],
-        take: 120,
-      }),
-      prisma.invoice.count({ where: periodWhere }),
-      prisma.invoice.count({ where: { ...periodWhere, status: "paid" } }),
-      prisma.invoice.count({ where: { ...periodWhere, status: "unpaid" } }),
-      prisma.invoice.count({ where: { ...periodWhere, status: "pending_verification" } }),
-      prisma.invoice.count({ where: { ...periodWhere, status: "overdue" } }),
-      prisma.invoice.count({ where: { ...periodWhere, status: "cancelled" } }),
-      prisma.invoice.aggregate({ _sum: { amount: true }, where: { ...periodWhere, status: "paid" } }),
-      prisma.invoice.aggregate({
-        _sum: { amount: true },
-        where: { ...periodWhere, status: { in: ["unpaid", "overdue", "pending_verification"] } },
-      }),
-    ]);
+  const [invoices, statusSummary] = await Promise.all([
+    prisma.invoice.findMany({
+      where: invoiceWhere,
+      include: {
+        member: { include: { package: true } },
+      },
+      orderBy: [{ status: "asc" }, { dueDate: "asc" }, { createdAt: "desc" }],
+      take: 120,
+    }),
+    prisma.invoice.groupBy({
+      by: ["status"],
+      where: periodWhere,
+      _count: { _all: true },
+      _sum: { amount: true },
+    }),
+  ]);
+
+  const summaryByStatus = new Map(
+    statusSummary.map((item) => [
+      item.status,
+      {
+        count: item._count._all,
+        amount: Number(item._sum.amount ?? 0),
+      },
+    ]),
+  );
+  const statusCount = (invoiceStatus: string) => summaryByStatus.get(invoiceStatus)?.count ?? 0;
+  const statusAmount = (invoiceStatus: string) => summaryByStatus.get(invoiceStatus)?.amount ?? 0;
+  const totalInvoices = statusSummary.reduce((sum, item) => sum + item._count._all, 0);
+  const paidInvoices = statusCount("paid");
+  const unpaidInvoices = statusCount("unpaid");
+  const pendingInvoices = statusCount("pending_verification");
+  const overdueInvoices = statusCount("overdue");
+  const cancelledInvoices = statusCount("cancelled");
+  const revenue = statusAmount("paid");
+  const outstanding = statusAmount("unpaid") + statusAmount("overdue") + statusAmount("pending_verification");
 
   const paidPercent = totalInvoices ? Math.round((paidInvoices / totalInvoices) * 100) : 0;
   const openInvoices = unpaidInvoices + pendingInvoices + overdueInvoices;
@@ -218,8 +222,8 @@ export default async function Home({
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 md:px-6">
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryCard title="Total Invoice" value={totalInvoices} helper={formatPeriod(month, year)} icon={ReceiptText} tone="blue" />
-          <SummaryCard title="Sudah Lunas" value={paidInvoices} helper={formatCurrency(revenue._sum.amount)} icon={CheckCircle2} tone="emerald" />
-          <SummaryCard title="Perlu Dicek" value={openInvoices} helper={`Tunggakan ${formatCurrency(outstanding._sum.amount)}`} icon={Clock3} tone="amber" />
+          <SummaryCard title="Sudah Lunas" value={paidInvoices} helper={formatCurrency(revenue)} icon={CheckCircle2} tone="emerald" />
+          <SummaryCard title="Perlu Dicek" value={openInvoices} helper={`Tunggakan ${formatCurrency(outstanding)}`} icon={Clock3} tone="amber" />
           <SummaryCard title="Terlambat" value={overdueInvoices} helper="Prioritas pembayaran" icon={AlertTriangle} tone="rose" />
         </section>
 

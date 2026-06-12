@@ -50,6 +50,14 @@ export async function POST(request: Request) {
   });
   if (!parsed.success) return jsonError(parsed.error.issues[0]?.message || "Data member tidak valid.");
   const data = parsed.data;
+  if (data.packageId) {
+    const selectedPackage = await prisma.package.findFirst({
+      where: { id: data.packageId, ownerId: auth.owner.id },
+      select: { id: true },
+    });
+    if (!selectedPackage) return jsonError("Paket member tidak valid.");
+  }
+
   const member = await prisma.member.create({
     data: {
       ownerId: auth.owner.id,

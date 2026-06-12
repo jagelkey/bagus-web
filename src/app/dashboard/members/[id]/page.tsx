@@ -12,19 +12,23 @@ import { StatCard } from "@/components/ui/stat-card";
 export default async function MemberDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const owner = await requireOwner();
   const { id } = await params;
-  const [member, packages] = await Promise.all([
-    prisma.member.findFirst({
-      where: { id, ownerId: owner.id },
-      include: {
-        package: true,
-        invoices: { orderBy: { createdAt: "desc" }, take: 12 },
-        payments: { include: { invoice: true }, orderBy: { createdAt: "desc" }, take: 12 },
-      },
-    }),
-    prisma.package.findMany({ where: { ownerId: owner.id, isActive: true }, orderBy: { name: "asc" } }),
-  ]);
+  const member = await prisma.member.findFirst({
+    where: { id, ownerId: owner.id },
+    include: {
+      package: true,
+      invoices: { orderBy: { createdAt: "desc" }, take: 12 },
+      payments: { include: { invoice: true }, orderBy: { createdAt: "desc" }, take: 12 },
+    },
+  });
 
   if (!member) notFound();
+  const packages = await prisma.package.findMany({
+    where: {
+      ownerId: owner.id,
+      OR: [{ isActive: true }, ...(member.packageId ? [{ id: member.packageId }] : [])],
+    },
+    orderBy: { name: "asc" },
+  });
   const openInvoices = member.invoices.filter((invoice) => ["unpaid", "pending_verification", "overdue"].includes(invoice.status));
   const openAmount = openInvoices.reduce((sum, invoice) => sum + Number(invoice.amount), 0);
   const paidAmount = member.invoices

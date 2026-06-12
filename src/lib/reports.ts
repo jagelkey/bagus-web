@@ -1,4 +1,21 @@
 import { prisma } from "@/lib/prisma";
+import { INVOICE_STATUSES } from "@/lib/constants";
+
+export function normalizeReportMonth(value: string | number | null | undefined, fallback: number) {
+  const month = Number(value);
+  if (!Number.isInteger(month) || month < 1 || month > 12) return fallback;
+  return month;
+}
+
+export function normalizeReportYear(value: string | number | null | undefined, fallback: number) {
+  const year = Number(value);
+  if (!Number.isInteger(year) || year < 2020 || year > 2100) return fallback;
+  return year;
+}
+
+export function normalizeReportStatus(value: string | null | undefined) {
+  return INVOICE_STATUSES.includes(value as (typeof INVOICE_STATUSES)[number]) ? value || undefined : undefined;
+}
 
 export async function getMonthlyReport(input: {
   ownerId: string;

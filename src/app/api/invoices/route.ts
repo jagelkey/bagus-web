@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { createInvoiceForMember, refreshOverdueInvoices } from "@/lib/billing";
 import { jsonError, readJson, requireApiOwner } from "@/lib/api";
 import { invoiceSchema } from "@/lib/validators";
+import { normalizeReportMonth, normalizeReportStatus, normalizeReportYear } from "@/lib/reports";
 
 export async function GET(request: Request) {
   const auth = await requireApiOwner();
@@ -11,12 +12,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const month = url.searchParams.get("month");
   const year = url.searchParams.get("year");
-  const status = url.searchParams.get("status");
+  const status = normalizeReportStatus(url.searchParams.get("status"));
   const invoices = await prisma.invoice.findMany({
     where: {
       ownerId: auth.owner.id,
-      ...(month ? { periodMonth: Number(month) } : {}),
-      ...(year ? { periodYear: Number(year) } : {}),
+      ...(month ? { periodMonth: normalizeReportMonth(month, new Date().getMonth() + 1) } : {}),
+      ...(year ? { periodYear: normalizeReportYear(year, new Date().getFullYear()) } : {}),
       ...(status ? { status } : {}),
     },
     include: { member: true },

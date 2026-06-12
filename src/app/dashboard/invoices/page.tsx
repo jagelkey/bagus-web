@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireOwner } from "@/lib/auth";
 import { refreshOverdueInvoices } from "@/lib/billing";
 import { formatCurrency, formatDate, formatPeriod } from "@/lib/format";
+import { normalizeReportMonth, normalizeReportStatus, normalizeReportYear } from "@/lib/reports";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -27,14 +28,15 @@ export default async function InvoicesPage({
   await refreshOverdueInvoices(owner.id);
   const params = await searchParams;
   const now = new Date();
-  const month = Number(params.month || now.getMonth() + 1);
-  const year = Number(params.year || now.getFullYear());
+  const month = normalizeReportMonth(params.month, now.getMonth() + 1);
+  const year = normalizeReportYear(params.year, now.getFullYear());
+  const status = normalizeReportStatus(params.status);
   const invoices = await prisma.invoice.findMany({
     where: {
       ownerId: owner.id,
       periodMonth: month,
       periodYear: year,
-      ...(params.status ? { status: params.status } : {}),
+      ...(status ? { status } : {}),
       ...(params.member ? { member: { name: { contains: params.member, mode: "insensitive" } } } : {}),
     },
     include: { member: { include: { package: true } } },
@@ -84,7 +86,7 @@ export default async function InvoicesPage({
           ))}
         </select>
         <input name="year" type="number" defaultValue={year} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
-        <select name="status" defaultValue={params.status || ""} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+        <select name="status" defaultValue={status || ""} className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
           <option value="">Semua status</option>
           <option value="paid">Sudah bayar</option>
           <option value="unpaid">Belum bayar</option>

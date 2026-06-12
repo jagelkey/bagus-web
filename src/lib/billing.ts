@@ -20,6 +20,16 @@ export function getDueDate(year: number, month: number, billingDueDay: number) {
   return new Date(year, month - 1, day);
 }
 
+function isInvoiceNumberCollision(error: unknown) {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+    return false;
+  }
+
+  const target = error.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? "")];
+  return fields.some((field) => field.includes("invoice_number") || field.includes("unique_owner_invoice_number"));
+}
+
 export async function nextInvoiceNumber(ownerId: string, year: number, month: number) {
   const prefix = `INV-${year}-${String(month).padStart(2, "0")}`;
   const count = await prisma.invoice.count({
@@ -47,19 +57,27 @@ export async function createInvoiceForMember(input: {
   const amount = input.amount ?? member.monthlyPrice;
   const dueDate = input.dueDate ?? getDueDate(input.periodYear, input.periodMonth, member.billingDueDay);
 
-  return prisma.invoice.create({
-    data: {
-      ownerId: input.ownerId,
-      memberId: input.memberId,
-      invoiceNumber: await nextInvoiceNumber(input.ownerId, input.periodYear, input.periodMonth),
-      periodMonth: input.periodMonth,
-      periodYear: input.periodYear,
-      amount,
-      dueDate,
-      paymentToken: makePaymentToken(),
-      notes: input.notes || null,
-    },
-  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.invoice.create({
+        data: {
+          ownerId: input.ownerId,
+          memberId: input.memberId,
+          invoiceNumber: await nextInvoiceNumber(input.ownerId, input.periodYear, input.periodMonth),
+          periodMonth: input.periodMonth,
+          periodYear: input.periodYear,
+          amount,
+          dueDate,
+          paymentToken: makePaymentToken(),
+          notes: input.notes || null,
+        },
+      });
+    } catch (error) {
+      if (!isInvoiceNumberCollision(error) || attempt === 2) throw error;
+    }
+  }
+
+  throw new Error("Invoice gagal dibuat.");
 }
 
 export async function refreshOverdueInvoices(ownerId: string) {

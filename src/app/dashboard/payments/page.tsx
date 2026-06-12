@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { rejectPaymentAction, verifyPaymentAction } from "@/app/actions";
+import { PAYMENT_STATUSES } from "@/lib/constants";
 
 export default async function PaymentsPage({
   searchParams,
@@ -16,7 +17,12 @@ export default async function PaymentsPage({
 }) {
   const owner = await requireOwner();
   const params = await searchParams;
-  const status = params.status || "pending_verification";
+  const status =
+    params.status === undefined
+      ? "pending_verification"
+      : PAYMENT_STATUSES.includes(params.status as (typeof PAYMENT_STATUSES)[number])
+        ? params.status
+        : "";
   const payments = await prisma.payment.findMany({
     where: {
       ...(status ? { status } : {}),
@@ -29,13 +35,14 @@ export default async function PaymentsPage({
     orderBy: { createdAt: "desc" },
   });
 
-  const proofLinks = new Map<string, string | null>();
-  for (const payment of payments) {
-    proofLinks.set(
-      payment.id,
-      await getSignedUrl(process.env.STORAGE_BUCKET_PAYMENT_PROOFS || "payment-proofs", payment.proofFileUrl),
-    );
-  }
+  const proofLinks = new Map(
+    await Promise.all(
+      payments.map(async (payment) => [
+        payment.id,
+        await getSignedUrl(process.env.STORAGE_BUCKET_PAYMENT_PROOFS || "payment-proofs", payment.proofFileUrl),
+      ] as const),
+    ),
+  );
 
   return (
     <div className="grid gap-6 pb-20 lg:pb-0">
