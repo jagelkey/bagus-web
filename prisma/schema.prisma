@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Owner {
+  id               String            @id @db.Uuid
+  name             String            @db.VarChar(150)
+  email            String            @unique @db.VarChar(150)
+  phone            String?           @db.VarChar(30)
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  packages         Package[]
+  members          Member[]
+  invoices         Invoice[]
+  paymentSettings  PaymentSetting[]
+  messageTemplates MessageTemplate[]
+  messageLogs      MessageLog[]
+  activityLogs     ActivityLog[]
+
+  @@map("owners")
+}
+
+model Package {
+  id           String   @id @default(uuid()) @db.Uuid
+  ownerId      String   @map("owner_id") @db.Uuid
+  name         String   @db.VarChar(100)
+  price        Decimal  @default(0) @db.Decimal(12, 2)
+  billingCycle String   @default("monthly") @map("billing_cycle") @db.VarChar(30)
+  description  String?
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  owner        Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members      Member[]
+
+  @@index([ownerId])
+  @@map("packages")
+}
+
+model Member {
+  id               String    @id @default(uuid()) @db.Uuid
+  ownerId          String    @map("owner_id") @db.Uuid
+  packageId        String?   @map("package_id") @db.Uuid
+  name             String    @db.VarChar(150)
+  email            String    @db.VarChar(150)
+  phoneWa          String    @map("phone_wa") @db.VarChar(30)
+  businessName     String?   @map("business_name") @db.VarChar(150)
+  playConsoleEmail String?   @map("play_console_email") @db.VarChar(150)
+  monthlyPrice     Decimal   @default(0) @map("monthly_price") @db.Decimal(12, 2)
+  billingDueDay    Int       @default(10) @map("billing_due_day")
+  startDate        DateTime  @map("start_date") @db.Date
+  endDate          DateTime? @map("end_date") @db.Date
+  status           String    @default("active") @db.VarChar(30)
+  notes            String?
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  owner            Owner     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  package          Package?  @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  invoices         Invoice[]
+  payments         Payment[]
+  messageLogs      MessageLog[]
+
+  @@index([ownerId, status])
+  @@index([packageId])
+  @@map("members")
+}
+
+model Invoice {
+  id            String       @id @default(uuid()) @db.Uuid
+  ownerId       String       @map("owner_id") @db.Uuid
+  memberId      String       @map("member_id") @db.Uuid
+  invoiceNumber String       @map("invoice_number") @db.VarChar(50)
+  periodMonth   Int          @map("period_month")
+  periodYear    Int          @map("period_year")
+  amount        Decimal      @default(0) @db.Decimal(12, 2)
+  dueDate       DateTime     @map("due_date") @db.Date
+  status        String       @default("unpaid") @db.VarChar(30)
+  paymentToken  String       @unique @map("payment_token") @db.VarChar(150)
+  notes         String?
+  paidAt        DateTime?    @map("paid_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  owner         Owner        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  member        Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  payments      Payment[]
+  messageLogs   MessageLog[]
+
+  @@unique([ownerId, invoiceNumber], name: "unique_owner_invoice_number")
+  @@unique([memberId, periodMonth, periodYear], name: "unique_member_invoice_period")
+  @@index([ownerId, status])
+  @@index([ownerId, periodYear, periodMonth])
+  @@map("invoices")
+}
+
+model Payment {
+  id            String    @id @default(uuid()) @db.Uuid
+  invoiceId     String    @map("invoice_id") @db.Uuid
+  memberId      String    @map("member_id") @db.Uuid
+  amount        Decimal   @default(0) @db.Decimal(12, 2)
+  paymentMethod String    @map("payment_method") @db.VarChar(50)
+  payerName     String?   @map("payer_name") @db.VarChar(150)
+  proofFileUrl  String?   @map("proof_file_url")
+  status        String    @default("pending_verification") @db.VarChar(30)
+  verifiedAt    DateTime? @map("verified_at")
+  verifiedBy    String?   @map("verified_by") @db.Uuid
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  invoice       Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  member        Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([memberId])
+  @@index([status])
+  @@map("payments")
+}
+
+model PaymentSetting {
+  id                         String   @id @default(uuid()) @db.Uuid
+  ownerId                    String   @map("owner_id") @db.Uuid
+  bankName                   String   @map("bank_name") @db.VarChar(100)
+  bankAccountNumber          String   @map("bank_account_number") @db.VarChar(100)
+  bankAccountHolder          String   @map("bank_account_holder") @db.VarChar(150)
+  qrisImageUrl               String?  @map("qris_image_url")
+  whatsappConfirmationNumber String?  @map("whatsapp_confirmation_number") @db.VarChar(30)
+  paymentInstruction         String?  @map("payment_instruction")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+  owner                      Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@map("payment_settings")
+}
+
+model MessageTemplate {
+  id        String   @id @default(uuid()) @db.Uuid
+  ownerId   String   @map("owner_id") @db.Uuid
+  type      String   @db.VarChar(50)
+  name      String   @db.VarChar(100)
+  subject   String?  @db.VarChar(200)
+  body      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  owner     Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, type])
+  @@index([ownerId])
+  @@map("message_templates")
+}
+
+model MessageLog {
+  id           String    @id @default(uuid()) @db.Uuid
+  ownerId      String    @map("owner_id") @db.Uuid
+  memberId     String?   @map("member_id") @db.Uuid
+  invoiceId    String?   @map("invoice_id") @db.Uuid
+  channel      String    @db.VarChar(30)
+  recipient    String    @db.VarChar(150)
+  message      String?
+  status       String    @db.VarChar(30)
+  sentAt       DateTime? @map("sent_at")
+  errorMessage String?   @map("error_message")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  owner        Owner     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  member       Member?   @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  invoice      Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId, channel])
+  @@index([invoiceId])
+  @@map("message_logs")
+}
+
+model ActivityLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  ownerId     String?  @map("owner_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  entityType  String?  @map("entity_type") @db.VarChar(100)
+  entityId    String?  @map("entity_id") @db.Uuid
+  description String?
+  ipAddress   String?  @map("ip_address") @db.VarChar(100)
+  createdAt   DateTime @default(now()) @map("created_at")
+  owner       Owner?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@map("activity_logs")
+}
